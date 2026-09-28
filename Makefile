@@ -7,7 +7,6 @@ include $(TOPDIR)/rules.mk
 LUCI_TITLE:=LuCI for Tailscale
 LUCI_DEPENDS:=+tailscale +jshn +curl +jq +flock
 LUCI_PKGARCH:=all
-
 PKG_VERSION:=1.2.17
 
 # Keep UCI configs as ordinary package data. The pre-install hook snapshots an
@@ -25,7 +24,6 @@ legacy_backup_dir=/etc/tailscale/luci-app-tailscale-legacy
 
 disable_legacy_hotplug() {
 	local backup_file
-
 	[ -e "$${legacy_hotplug}" ] || [ -L "$${legacy_hotplug}" ] || return 0
 	backup_file="$${legacy_backup_dir}/40-tailscale.disabled.$$(date +%Y%m%d%H%M%S).$$$$"
 	if mkdir -p "$${legacy_backup_dir}" 2>/dev/null && cp -p "$${legacy_hotplug}" "$${backup_file}"; then
@@ -33,7 +31,6 @@ disable_legacy_hotplug() {
 	else
 		rm -f "$${backup_file}" 2>/dev/null || true
 	fi
-
 	# Disabling the duplicate starter is mandatory even when its backup fails.
 	# chmod is a last-resort guard for a transient remove failure; package
 	# extraction will subsequently remove the obsolete package-owned path.
@@ -42,7 +39,8 @@ disable_legacy_hotplug() {
 
 disable_legacy_hotplug || exit 1
 
-[ -f /etc/config/tailscale ] || exit 0
+# 若系统内无任何相关配置文件，说明是全新安装，直接退出让包管理器正常解压释放默认配置
+[ -f /etc/config/tailscale ] || [ -f /etc/config/tailscale_openclash ] || [ -f /etc/config/tailscale_policy_routing ] || exit 0
 [ -f "$${state_dir}/.complete" ] && exit 0
 
 clear_state_dir() {
@@ -54,20 +52,26 @@ clear_state_dir() {
 
 clear_state_dir "$${state_dir}" || exit 1
 clear_state_dir "$${state_pending}" || exit 1
+
 umask 077
 mkdir "$${state_pending}" || exit 1
 chmod 700 "$${state_pending}" || exit 1
-cp /etc/config/tailscale "$${state_pending}/tailscale" || exit 1
+
+if [ -f /etc/config/tailscale ]; then
+	cp /etc/config/tailscale "$${state_pending}/tailscale" || exit 1
+fi
+
 if [ -f /etc/config/tailscale_openclash ]; then
 	cp /etc/config/tailscale_openclash "$${state_pending}/tailscale_openclash" || exit 1
-else
-	: >"$${state_pending}/tailscale_openclash.absent" || exit 1
 fi
+
 if [ -f /etc/config/tailscale_policy_routing ]; then
 	cp /etc/config/tailscale_policy_routing "$${state_pending}/tailscale_policy_routing" || exit 1
 fi
+
 : >"$${state_pending}/.complete" || exit 1
 mv "$${state_pending}" "$${state_dir}" || exit 1
+
 exit 0
 endef
 
@@ -82,7 +86,9 @@ case "$${2:-}" in
 		# apk runs pre-deinstall directly with the old package version in $1.
 		case "$${1:-}" in
 			[0-9]*) ;;
-			*) exit 0 ;;
+			*)
+				exit 0
+				;;
 		esac
 		;;
 esac
@@ -90,24 +96,30 @@ esac
 if [ -z "$${IPKG_INSTROOT}" ] && [ -x /usr/sbin/tailscale_policy_routing ]; then
 	/usr/sbin/tailscale_policy_routing cleanup >/dev/null 2>&1 || exit 1
 fi
+
 if [ -z "$${IPKG_INSTROOT}" ] && [ -x /etc/init.d/tailscale-policy-routing ]; then
 	/etc/init.d/tailscale-policy-routing disable >/dev/null 2>&1 || exit 1
 fi
+
 if [ -z "$${IPKG_INSTROOT}" ] && [ -x /usr/sbin/tailscale_openclash_bypass ]; then
 	/usr/sbin/tailscale_openclash_bypass cleanup >/dev/null 2>&1 || true
 fi
+
 if [ -z "$${IPKG_INSTROOT}" ] && [ -x /etc/init.d/tailscale-openclash-bypass ]; then
 	/etc/init.d/tailscale-openclash-bypass disable >/dev/null 2>&1 || true
 fi
+
 if [ -z "$${IPKG_INSTROOT}" ] && [ -x /etc/init.d/tailscale ]; then
 	/etc/init.d/tailscale stop >/dev/null 2>&1 || exit 1
 fi
+
 for cleanup_dir in "$${state_dir}" "$${state_dir}.pending"; do
 	rm -f "$${cleanup_dir}/tailscale" "$${cleanup_dir}/tailscale_openclash" \
 		"$${cleanup_dir}/tailscale_openclash.absent" "$${cleanup_dir}/tailscale_policy_routing" \
 		"$${cleanup_dir}/.complete"
 	rmdir "$${cleanup_dir}" 2>/dev/null || true
 done
+
 exit 0
 endef
 
